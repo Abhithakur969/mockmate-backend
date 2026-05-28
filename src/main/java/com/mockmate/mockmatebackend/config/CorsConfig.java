@@ -12,8 +12,9 @@ public class CorsConfig implements WebMvcConfigurer {
                 .allowedOrigins(
                         "http://localhost:5174",   // Vite dev server
                         "http://localhost:5173",
-                        "https://your-app.vercel.app" // Add after Vercel deploy
+                        "https://mockmate-frontend-chi.vercel.app" // Add after Vercel deploy
                 )
                 .allowedMethods("POST", "GET", "OPTIONS");
     }
 }
+
