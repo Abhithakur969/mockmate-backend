@@ -12,13 +12,14 @@ public class GeminiClient {
     @Value("${gemini.api.key}")
     private String apiKey;
 
+    // Updated to the stable, high-availability production model URL
     private static final String GEMINI_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 
     public String generate(String prompt) {
         RestTemplate restTemplate = new RestTemplate();
 
-        // 1. Build the correct nested payload structure for Gemini
+        // 1. Build payload structure
         Map<String, Object> part = new HashMap<>();
         part.put("text", prompt);
 
@@ -32,26 +33,25 @@ public class GeminiClient {
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-
-        // 2. FIXED: Properly append the key parameter using "?key="
         String fullUrl = GEMINI_URL + "?key=" + apiKey;
 
         try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    fullUrl, request, Map.class
-            );
+            ResponseEntity<Map> response = restTemplate.postForEntity(fullUrl, request, Map.class);
+            Map<?, ?> responseBody = response.getBody();
 
-            // 3. Safely extract the text from the response map
-            Map responseBody = response.getBody();
             if (responseBody == null) {
                 throw new RuntimeException("Empty response body received from Gemini API");
             }
 
-            List candidates = (List) responseBody.get("candidates");
-            Map candidate = (Map) candidates.get(0);
-            Map contentMap = (Map) candidate.get("content");
-            List parts = (List) contentMap.get("parts");
-            Map firstPart = (Map) parts.get(0);
+            List<?> candidates = (List<?>) responseBody.get("candidates");
+            if (candidates == null || candidates.isEmpty()) {
+                throw new RuntimeException("No candidates returned from Gemini API");
+            }
+
+            Map<?, ?> candidate = (Map<?, ?>) candidates.get(0);
+            Map<?, ?> contentMap = (Map<?, ?>) candidate.get("content");
+            List<?> parts = (List<?>) contentMap.get("parts");
+            Map<?, ?> firstPart = (Map<?, ?>) parts.get(0);
 
             return (String) firstPart.get("text");
 
