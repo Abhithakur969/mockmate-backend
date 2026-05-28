@@ -9,13 +9,16 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins(
-                        "http://localhost:5174",
+                // Allows local servers and ANY subdomain or deployment branch build on Vercel
+                .allowedOriginPatterns(
                         "http://localhost:5173",
-                        "https://mockmate-frontend-chi.vercel.app" // Matches your live Vercel domain
+                        "http://localhost:5174",
+                        "https://*.vercel.app"
                 )
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .allowCredentials(true); // CRITICAL: Allows Axios to send processing requests securely
+                .exposedHeaders("Authorization")
+                .allowCredentials(true)
+                .maxAge(3600); // Caches preflight request answers for 1 hour to maximize latency efficiency
     }
 }
