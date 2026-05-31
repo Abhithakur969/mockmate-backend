@@ -12,14 +12,41 @@ public class GeminiClient {
     @Value("${gemini.api.key}")
     private String apiKey;
 
-    // Updated to the stable, high-availability production model URL
-    private static final String GEMINI_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+    // Fallback chain — tried in order until one succeeds
+    private static final List<String> GEMINI_MODELS = List.of(
+            "gemini-2.0-flash",        // Primary: fast, cheap, widely available
+            "gemini-1.5-flash",        // Fallback 1: stable and reliable
+            "gemini-1.5-flash-8b",     // Fallback 2: lightweight backup
+            "gemini-1.5-pro"           // Fallback 3: most capable, use as last resort
+    );
+
+    private static final String BASE_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent";
 
     public String generate(String prompt) {
+        List<String> errors = new ArrayList<>();
+
+        for (String model : GEMINI_MODELS) {
+            try {
+                String result = callGemini(prompt, model);
+                System.out.println("[GeminiClient] Success with model: " + model);
+                return result;
+            } catch (Exception e) {
+                String error = "Model [" + model + "] failed: " + e.getMessage();
+                System.err.println("[GeminiClient] " + error);
+                errors.add(error);
+            }
+        }
+
+        // All models failed — throw with full error context
+        throw new RuntimeException(
+                "All Gemini models failed. Errors:\n" + String.join("\n", errors)
+        );
+    }
+
+    private String callGemini(String prompt, String model) {
         RestTemplate restTemplate = new RestTemplate();
 
-        // 1. Build payload structure
         Map<String, Object> part = new HashMap<>();
         part.put("text", prompt);
 
@@ -33,30 +60,31 @@ public class GeminiClient {
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-        String fullUrl = GEMINI_URL + "?key=" + apiKey;
+        String fullUrl = String.format(BASE_URL, model) + "?key=" + apiKey;
 
-        try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(fullUrl, request, Map.class);
-            Map<?, ?> responseBody = response.getBody();
+        ResponseEntity<Map> response = restTemplate.postForEntity(fullUrl, request, Map.class);
+        Map<?, ?> responseBody = response.getBody();
 
-            if (responseBody == null) {
-                throw new RuntimeException("Empty response body received from Gemini API");
-            }
-
-            List<?> candidates = (List<?>) responseBody.get("candidates");
-            if (candidates == null || candidates.isEmpty()) {
-                throw new RuntimeException("No candidates returned from Gemini API");
-            }
-
-            Map<?, ?> candidate = (Map<?, ?>) candidates.get(0);
-            Map<?, ?> contentMap = (Map<?, ?>) candidate.get("content");
-            List<?> parts = (List<?>) contentMap.get("parts");
-            Map<?, ?> firstPart = (Map<?, ?>) parts.get(0);
-
-            return (String) firstPart.get("text");
-
-        } catch (Exception e) {
-            throw new RuntimeException("Gemini API call failed: " + e.getMessage(), e);
+        if (responseBody == null) {
+            throw new RuntimeException("Empty response body");
         }
+
+        // Check for API-level error block (e.g. quota exceeded, invalid model)
+        if (responseBody.containsKey("error")) {
+            Map<?, ?> errorBlock = (Map<?, ?>) responseBody.get("error");
+            throw new RuntimeException("API error: " + errorBlock.get("message"));
+        }
+
+        List<?> candidates = (List<?>) responseBody.get("candidates");
+        if (candidates == null || candidates.isEmpty()) {
+            throw new RuntimeException("No candidates returned");
+        }
+
+        Map<?, ?> candidate     = (Map<?, ?>) candidates.get(0);
+        Map<?, ?> contentMap    = (Map<?, ?>) candidate.get("content");
+        List<?> parts           = (List<?>) contentMap.get("parts");
+        Map<?, ?> firstPart     = (Map<?, ?>) parts.get(0);
+
+        return (String) firstPart.get("text");
     }
 }
