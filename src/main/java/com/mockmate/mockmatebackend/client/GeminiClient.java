@@ -12,12 +12,10 @@ public class GeminiClient {
     @Value("${gemini.api.key}")
     private String apiKey;
 
-    // Fallback chain — tried in order until one succeeds
     private static final List<String> GEMINI_MODELS = List.of(
-            "gemini-2.0-flash",        // Primary: fast, cheap, widely available
-            "gemini-1.5-flash",        // Fallback 1: stable and reliable
-            "gemini-1.5-flash-8b",     // Fallback 2: lightweight backup
-            "gemini-1.5-pro"           // Fallback 3: most capable, use as last resort
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",        // Fallback 1
+            "gemini-2.5-pro"
     );
 
     private static final String BASE_URL =
@@ -29,16 +27,19 @@ public class GeminiClient {
         for (String model : GEMINI_MODELS) {
             try {
                 String result = callGemini(prompt, model);
-                System.out.println("[GeminiClient] Success with model: " + model);
+                System.out.println("[GeminiClient] ✅ Success with model: " + model);
                 return result;
+            } catch (RateLimitException e) {
+                // 429 — wait the suggested delay then try next model immediately
+                System.err.println("[GeminiClient] ⏳ Rate limited on [" + model + "], retry in " + e.retryAfterSeconds + "s. Switching model...");
+                errors.add("Model [" + model + "] rate limited (429): retry in " + e.retryAfterSeconds + "s");
+                // Don't sleep — just move to next model in fallback chain
             } catch (Exception e) {
-                String error = "Model [" + model + "] failed: " + e.getMessage();
-                System.err.println("[GeminiClient] " + error);
-                errors.add(error);
+                System.err.println("[GeminiClient] ❌ Model [" + model + "] failed: " + e.getMessage());
+                errors.add("Model [" + model + "] failed: " + e.getMessage());
             }
         }
 
-        // All models failed — throw with full error context
         throw new RuntimeException(
                 "All Gemini models failed. Errors:\n" + String.join("\n", errors)
         );
@@ -69,10 +70,18 @@ public class GeminiClient {
             throw new RuntimeException("Empty response body");
         }
 
-        // Check for API-level error block (e.g. quota exceeded, invalid model)
+        // Catch API-level errors (quota, model not found, etc.)
         if (responseBody.containsKey("error")) {
             Map<?, ?> errorBlock = (Map<?, ?>) responseBody.get("error");
-            throw new RuntimeException("API error: " + errorBlock.get("message"));
+            int code = (int) errorBlock.get("code");
+            String message = (String) errorBlock.get("message");
+
+            if (code == 429) {
+                // Extract retry delay if present
+                int retryAfter = extractRetryDelay(errorBlock);
+                throw new RateLimitException(message, retryAfter);
+            }
+            throw new RuntimeException("API error " + code + ": " + message);
         }
 
         List<?> candidates = (List<?>) responseBody.get("candidates");
@@ -80,11 +89,38 @@ public class GeminiClient {
             throw new RuntimeException("No candidates returned");
         }
 
-        Map<?, ?> candidate     = (Map<?, ?>) candidates.get(0);
-        Map<?, ?> contentMap    = (Map<?, ?>) candidate.get("content");
-        List<?> parts           = (List<?>) contentMap.get("parts");
-        Map<?, ?> firstPart     = (Map<?, ?>) parts.get(0);
+        Map<?, ?> candidate  = (Map<?, ?>) candidates.get(0);
+        Map<?, ?> contentMap = (Map<?, ?>) candidate.get("content");
+        List<?> parts        = (List<?>) contentMap.get("parts");
+        Map<?, ?> firstPart  = (Map<?, ?>) parts.get(0);
 
         return (String) firstPart.get("text");
+    }
+
+    /** Pulls retryDelay seconds out of the error details block if present */
+    @SuppressWarnings("unchecked")
+    private int extractRetryDelay(Map<?, ?> errorBlock) {
+        try {
+            List<?> details = (List<?>) errorBlock.get("details");
+            if (details != null) {
+                for (Object detail : details) {
+                    Map<String, Object> d = (Map<String, Object>) detail;
+                    if (d.containsKey("retryDelay")) {
+                        String delay = (String) d.get("retryDelay"); // e.g. "25s"
+                        return Integer.parseInt(delay.replace("s", "").trim());
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return 30; // default fallback
+    }
+
+    /** Custom exception to distinguish 429 from other failures */
+    private static class RateLimitException extends RuntimeException {
+        final int retryAfterSeconds;
+        RateLimitException(String message, int retryAfterSeconds) {
+            super(message);
+            this.retryAfterSeconds = retryAfterSeconds;
+        }
     }
 }
